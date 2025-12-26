@@ -1,0 +1,497 @@
+﻿МІНІСТЕРСТВО ОСВІТИ І НАУКИ УКРАЇНИ
+ХАРКІВСЬКИЙ НАЦІОНАЛЬНИЙ УНІВЕРСИТЕТ РАДІОЕЛЕКТРОНІКИ
+
+
+ФАКУЛЬТЕТ КОМП’ЮТЕРНИХ НАУК
+КАТЕДРА ПРОГРАМНОЇ ІНЖЕНЕРІЇ
+
+
+
+
+
+
+
+
+ЗВІТ
+до лабораторної роботи №2 з дисципліни
+«Аналіз та рефакторинґ коду»
+на тему: «РОЗРОБКА БАЗИ ДАНИХ ДЛЯ СЕРВЕРНОЇ ЧАСТИНИ ПРОГРАМНОЇ СИСТЕМИ ТА ПРИКЛАДНОГО ПРОГРАМНОГО ІНТЕРФЕЙСУ (API)»
+
+
+
+
+
+
+
+
+Виконав:                                                             Перевірив:
+ст. гр. ПЗПІ-23-6                                                    ас. катедри ПІ
+Бєлік Єгор Васильович                                                Дашенков Дмитро Сергійович
+
+
+
+
+Харків 2025
+
+
+
+
+1 ЗАВДАННЯ
+
+
+Метою даної лабораторної роботи є проєктування та реалізація серверної частини програмної системи виявлення задимлення SmokeGuard з акцентом на розробці архітектури бази даних та прикладного програмного інтерфейсу. Перший етап передбачає створення архітектурних моделей системи: UML-діаграми прецедентів для визначення функціональних вимог серверної частини, ER-діаграми для концептуального моделювання структури даних та деталізованої схеми реляційної бази даних із зазначенням типів полів та обмежень цілісності.
+На підставі розроблених моделей необхідно реалізувати фізичну базу даних у PostgreSQL та забезпечити програмну взаємодію з нею через об’єктно-реляційне відображення за допомогою TypeORM. Наступним етапом є побудова REST API для забезпечення стандартизованого обміну даними між клієнтськими додатками та сервером, а також розробка детальної специфікації інтерфейсу із зазначенням HTTP-методів, маршрутів та форматів даних.
+
+
+
+
+
+
+________________
+
+
+2 ОПИС ВИКОНАНОЇ РОБОТИ
+2.1. Опис інженерних рішень та архітектури системи
+Для побудови серверної складової системи виявлення задимлення SmokeGuard було обрано архітектуру, засновану на REST API. Такий підхід забезпечує логічне розмежування між клієнтською та серверною частинами, що дозволяє використовувати спільний бекенд як для веб-інтерфейсу моніторингу, так і для можливих мобільних застосунків у майбутньому. Обмін даними між компонентами відбувається через стандартні HTTP-запити, а передача інформації здійснюється у форматі JSON, що спрощує інтеграцію та гарантує сумісність із зовнішніми сервісами.
+Реалізація серверної логіки виконана з використанням фреймворку NestJS, який працює на платформі Node.js. Його застосування зумовлене модульною організацією коду та підтримкою принципу інверсії залежностей, що позитивно впливає на масштабованість системи та зручність тестування. Використання мови програмування TypeScript забезпечує статичну типізацію, завдяки якій зменшується кількість помилок на етапі розробки та підвищується загальна підтримуваність проєкту. Крім того, NestJS надає вбудовані інструменти для автоматичної перевірки вхідних даних і декларативного опису API за допомогою декораторів.
+Для зберігання даних обрано реляційну систему керування базами даних PostgreSQL, яка відповідає вимогам ACID та забезпечує надійну роботу зі складними зв’язками між ключовими сутностями системи, зокрема користувачами, датчиками, вимірюваннями, подіями, сигналізаціями та сповіщеннями. Доступ до бази даних реалізовано через TypeORM, що виступає об’єктно-реляційним мапером і дозволяє працювати з даними у вигляді TypeScript-класів. За допомогою механізму міграцій TypeORM автоматизує керування схемою бази даних, а використання параметризованих запитів забезпечує захист від SQL-ін’єкцій.
+Для організації обміну даними в реальному часі між сервером і IoT-датчиками диму система інтегрована з MQTT-брокером EMQX. Протокол MQTT оптимізований для пристроїв з обмеженими обчислювальними ресурсами та забезпечує мінімальні затримки передачі повідомлень, що є критично важливим для систем пожежної безпеки та оперативного реагування.
+
+
+2.2. Проєктування бази даних та структури системи
+Для формалізації функціональних вимог до системи розроблено UML-діаграму прецедентів (див. рис. 2.1), що визначає дві основні ролі акторів: User та IoT Sensor, а також їхні сценарії взаємодії з системою.
+  
+
+Рисунок 2.1 – UML-діаграма прецедентів
+
+
+Інформаційну модель проєкту представлено на ER-діаграмі (рис. 2.2), яка визначає зв’язки між основними сутностями: користувачі (users), датчики (sensors), показання датчиків (sensor_readings), події системи (events), сигналізації (alarms) та оповіщення (notifications).
+
+
+  
+
+Рисунок 2.2 – ER-діаграма
+
+
+На основі концептуальної моделі створено фізичну структуру бази даних. Детальна схема таблиць із зазначенням типів даних, первинних ключів (PK), зовнішніх ключів (FK) та обмежень унікальності наведена на рис. 2.3.
+  
+
+Рисунок 2.3 – Схема БД
+
+
+2.3. Специфікація прикладного програмного інтерфейсу (API)
+2.3.1 Аутентифікація (Authentication) 
+* POST /api/auth/register 
+* POST /api/auth/login 
+* GET /api/auth/profile
+2.3.2 Управління датчиками (Sensors Management) 
+* GET /api/sensors 
+* POST /api/sensors 
+* GET /api/sensors/:id 
+* PATCH /api/sensors/:id 
+* DELETE /api/sensors/:id 
+* GET /api/sensors/:id/readings 
+
+
+2.3.3 Керування сигналізаціями (Alarms Management) 
+* GET /api/alarms 
+* POST /api/alarms
+* GET /api/alarms/:id 
+* PATCH /api/alarms/:id 
+* DELETE /api/alarms/:id 
+* POST /api/alarms/:id/activate 
+* POST /api/alarms/:id/deactivate
+
+
+2.3.4 Події системи (Events)
+* GET /api/events 
+* GET /api/events/:id 
+* GET /api/events/statistics
+
+
+2.3.5 Оповіщення (Notifications) 
+* GET /api/notifications/my
+* PATCH /api/notifications/unread-count
+* PATCH /api/notifications/read-all
+
+
+2.3.6 Звіти (Reports) 
+* POST /api/reports/generate
+
+
+2.3.7 MQTT інтеграція (для IoT пристроїв) 
+* POST /api/mqtt/auth 
+* POST /api/mqtt/acl
+
+
+2.4. Програмна реалізація серверної частини
+Програмна реалізація системи виконана за модульним принципом із використанням архітектурного патерну MVC, адаптованого до специфіки NestJS. Кожна функціональна область (аутентифікація, датчики, події, сигналізації) виділена в окремий модуль, який містить контролери для обробки HTTP-запитів, сервіси для бізнес-логіки та DTO-класи для валідації даних. Розглянемо детально реалізацію модуля управління датчиками (SensorsModule) як типовий приклад архітектури.
+Контролери у системі є вхідною точкою для HTTP-запитів. Вони відповідають за маршрутизацію, первинну валідацію вхідних параметрів та перевірку автентифікації користувача через JWT-токени.
+Нижче наведено фрагмент коду класу SensorsController, що реалізує REST ендпоінти для роботи з датчиками:
+
+
+@ApiTags('sensors')
+@Controller('sensors')
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth('JWT-auth')
+export class SensorsController {
+  constructor(private readonly sensorsService: SensorsService) {}
+
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  async create(
+    @GetUser('id') userId: number,
+    @Body() createSensorDto: CreateSensorDto,
+  ): Promise<CreateSensorResponseDto> {
+    return this.sensorsService.create(userId, createSensorDto);
+  }
+
+
+  @Get()
+  @HttpCode(HttpStatus.OK)
+  async findAll(
+    @GetUser('id') userId: number,
+    @Query() query: GetSensorsQueryDto,
+  ): Promise<SensorResponseDto[]> {
+    return this.sensorsService.findAll(userId, query);
+  }
+
+
+  @Get(':id')
+  @HttpCode(HttpStatus.OK)
+  async findOne(
+    @GetUser('id') userId: number,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<SensorResponseDto> {
+    return this.sensorsService.findOne(userId, id);
+  }
+
+
+  @Patch(':id')
+  @HttpCode(HttpStatus.OK)
+  async update(
+    @GetUser('id') userId: number,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateSensorDto: UpdateSensorDto,
+  ): Promise<SensorResponseDto> {
+    return this.sensorsService.update(userId, id, updateSensorDto);
+  }
+
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(
+    @GetUser('id') userId: number,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<void> {
+    return this.sensorsService.remove(userId, id);
+  }
+
+
+  @Get(':id/readings')
+  @HttpCode(HttpStatus.OK)
+  async getSensorReadings(
+    @GetUser('id') userId: number,
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: GetSensorReadingsQueryDto,
+  ): Promise<SensorReadingResponseDto[]> {
+    const filters: any = {
+      offset: query.offset,
+      limit: query.limit,
+    };
+
+
+    if (query.startDate) {
+      filters.startDate = new Date(query.startDate);
+    }
+
+
+    if (query.endDate) {
+      filters.endDate = new Date(query.endDate);
+    }
+
+
+    return this.sensorsService.getSensorReadings(userId, id, filters);
+  }
+}
+
+
+Бізнес-логіка винесена у сервісний шар, що дозволяє повністю відокремити обробку даних від HTTP-протоколу. Сервіси використовують Repository Pattern для взаємодії з базою даних через TypeORM.
+Фрагмент коду класу SensorsService:
+
+
+@Injectable()
+export class SensorsService {
+  constructor(
+    @InjectRepository(Sensor)
+    private readonly sensorRepository: Repository<Sensor>,
+    @InjectRepository(SensorReading)
+    private readonly sensorReadingRepository: Repository<SensorReading>,
+  ) {}
+
+
+  async create(
+    userId: number,
+    createSensorDto: CreateSensorDto
+  ): Promise<CreateSensorResponseDto> {
+    const sensorCode = this.generateSensorCode();
+    const sensorCodeHash = await this.hashSensorCode(sensorCode);
+
+
+    const sensor = this.sensorRepository.create({
+      ...createSensorDto,
+      userId,
+      sensorCodeHash,
+      status: SensorStatus.INACTIVE,
+    });
+
+
+    try {
+      const savedSensor = await this.sensorRepository.save(sensor);
+      return {
+        sensor: this.sanitizeSensor(savedSensor),
+        sensorCode,
+      };
+    } catch (error) {
+      if (error.code === '23505') {
+        throw new ConflictException('Датчик з таким кодом вже існує');
+      }
+      throw error;
+    }
+  }
+
+
+  async findAll(userId: number, filters?: {
+    status?: SensorStatus;
+    floor?: number;
+    building?: string;
+  }): Promise<SensorResponseDto[]> {
+    const queryBuilder = this.sensorRepository.createQueryBuilder('sensor');
+
+
+    queryBuilder.where('sensor.user_id = :userId', { userId });
+
+
+    if (filters?.status) {
+      queryBuilder.andWhere('sensor.status = :status', {
+        status: filters.status
+      });
+    }
+
+
+    if (filters?.floor !== undefined) {
+      queryBuilder.andWhere('sensor.floor = :floor', {
+        floor: filters.floor
+      });
+    }
+
+
+    if (filters?.building) {
+      queryBuilder.andWhere('sensor.building = :building', {
+        building: filters.building
+      });
+    }
+
+
+    queryBuilder.orderBy('sensor.createdAt', 'DESC');
+
+
+    const sensors = await queryBuilder.getMany();
+    return sensors.map((sensor) => this.sanitizeSensor(sensor));
+  }
+
+
+  async getSensorReadings(
+    userId: number,
+    id: number,
+    filters?: {
+      startDate?: Date;
+      endDate?: Date;
+      offset?: number;
+      limit?: number;
+    },
+  ): Promise<SensorReadingResponseDto[]> {
+    const sensor = await this.sensorRepository.findOne({
+      where: { id, userId }
+    });
+
+
+    if (!sensor) {
+      throw new NotFoundException('Датчик не знайдено');
+    }
+
+
+    const queryBuilder = this.sensorReadingRepository
+      .createQueryBuilder('reading')
+      .where('reading.sensor_id = :sensorId', { sensorId: id });
+
+
+    if (filters?.startDate) {
+      queryBuilder.andWhere('reading.timestamp >= :startDate', {
+        startDate: filters.startDate,
+      });
+    }
+
+
+    if (filters?.endDate) {
+      queryBuilder.andWhere('reading.timestamp <= :endDate', {
+        endDate: filters.endDate,
+      });
+    }
+
+
+    queryBuilder.orderBy('reading.timestamp', 'DESC');
+
+
+    if (filters?.offset) {
+      queryBuilder.offset(filters.offset);
+    }
+
+
+    if (filters?.limit) {
+      queryBuilder.limit(filters.limit);
+    }
+
+
+    const readings = await queryBuilder.getMany();
+
+
+    return readings.map((reading) => ({
+      id: reading.id,
+      sensorId: reading.sensorId,
+      smokeDetected: reading.smokeDetected,
+      smokeLevel: reading.smokeLevel,
+      temperature: reading.temperature,
+      humidity: reading.humidity,
+      timestamp: reading.timestamp,
+      createdAt: reading.createdAt,
+    }));
+  }
+
+
+  private generateSensorCode(): string {
+    return crypto.randomBytes(16).toString('hex');
+  }
+
+
+  private async hashSensorCode(code: string): Promise<string> {
+    return bcrypt.hash(code, 10);
+  }
+
+
+  private sanitizeSensor(sensor: Sensor): SensorResponseDto {
+    const { sensorCodeHash, ...sensorData } = sensor;
+
+
+    return {
+      id: sensorData.id,
+      location: sensorData.location,
+      floor: sensorData.floor,
+      building: sensorData.building,
+      status: sensorData.status,
+      lastCheckedAt: sensorData.lastCheckedAt,
+      createdAt: sensorData.createdAt,
+      updatedAt: sensorData.updatedAt,
+    };
+  }
+}
+
+
+Структура таблиць бази даних описується через TypeORM entities — класи, що відображають таблиці на об’єктну модель. Використання декораторів дозволяє декларативно визначити структуру даних безпосередньо в коді.
+Приклад сутності Sensor:
+
+
+@Entity('sensors')
+export class Sensor {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+
+  @Column({ name: 'user_id', type: 'int' })
+  userId: number;
+
+
+  @Column({ name: 'sensor_code', unique: true, length: 60 })
+  sensorCodeHash: string;
+
+
+  @Column({ length: 255 })
+  location: string;
+
+
+  @Column({ nullable: true, type: 'int' })
+  floor: number;
+
+
+  @Column({ length: 100, nullable: true })
+  building: string;
+
+
+  @Column({
+    type: 'varchar',
+    length: 50,
+    default: SensorStatus.INACTIVE,
+  })
+  status: SensorStatus;
+
+
+  @Column({ name: 'last_checked_at', nullable: true, type: 'timestamp' })
+  lastCheckedAt: Date;
+
+
+  @Column({ name: 'last_smoke_detected', nullable: true, type: 'boolean' })
+  lastSmokeDetected: boolean;
+
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+
+
+  @ManyToOne(() => User, (user) => user.sensors, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+
+
+  @OneToMany(() => SensorReading, (reading) => reading.sensor)
+  readings: SensorReading[];
+
+
+  @OneToMany(() => Event, (event) => event.sensor)
+  events: Event[];
+
+
+  @OneToMany(() => Alarm, (alarm) => alarm.sensor)
+  alarms: Alarm[];
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+________________
+
+
+ВИСНОВКИ
+У процесі виконання лабораторної роботи було спроєктовано та реалізовано реляційну базу даних для системи виявлення задимлення SmokeGuard, розроблено REST API для виконання операцій створення, читання, оновлення та видалення даних (CRUD) над основними сутностями системи (користувачі, датчики, показання, події, сигналізації, оповіщення), а також забезпечено взаємодію серверного додатку з PostgreSQL через об’єктно-реляційний мапер TypeORM.
+Репозиторій на GitHub: https://github.com/SmokeGuardProject/backend
+Посилання на відеозвіт: https://drive.google.com/file/d/1WnUsHFrKrVijy4xTyIu_CFEBEvs_gFaK/view?usp=drive_link

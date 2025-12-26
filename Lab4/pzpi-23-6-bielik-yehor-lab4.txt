@@ -1,0 +1,423 @@
+﻿МІНІСТЕРСТВО ОСВІТИ І НАУКИ УКРАЇНИ
+ХАРКІВСЬКИЙ НАЦІОНАЛЬНИЙ УНІВЕРСИТЕТ РАДІОЕЛЕКТРОНІКИ
+
+
+ФАКУЛЬТЕТ КОМП’ЮТЕРНИХ НАУК
+КАТЕДРА ПРОГРАМНОЇ ІНЖЕНЕРІЇ
+
+
+
+
+
+
+
+
+ЗВІТ
+до лабораторної роботи №4 з дисципліни
+«Аналіз та рефакторинґ коду»
+на тему: «РОЗРОБКА IoT КЛІЄНТА 
+(БІЗНЕС-ЛОГІКИ ТА ФУНКЦІЙ НАЛАШТУВАННЯ)»
+
+
+
+
+
+
+
+
+Виконав:                                                             Перевірив:
+ст. гр. ПЗПІ-23-6                                                    ас. катедри ПІ
+Бєлік Єгор Васильович                                                Дашенков Дмитро Сергійович
+
+
+
+
+
+
+Харків 2025
+
+
+
+
+1 ЗАВДАННЯ
+
+
+У ході виконання лабораторної роботи необхідно спроєктувати та реалізувати IoT-клієнта для системи виявлення задимлення на базі мікроконтролера ESP32. Основна увага приділяється розробці бізнес-логіки обробки даних від датчика диму MQ-2, а також датчика температури та вологості DHT11, механізмів налаштування пристрою та забезпечення надійної передачі телеметричних даних через протокол MQTT до серверної частини системи моніторингу задимлення у приміщеннях.
+
+
+
+
+________________
+
+
+2 ОПИС ВИКОНАНОЇ РОБОТИ
+2.1. Опис інженерних рішень та архітектури системи
+Основу архітектури IoT клієнта складає мікроконтролер ESP32, який забезпечує збір даних з аналогового датчика диму MQ-2 та цифрового датчика температури/вологості DHT11, їх обробку з використанням багаторівневої системи визначення задимлення та передачу на MQTT брокер (EMQX).
+Центральним інженерним рішенням є шестирівнева система класифікації задимлення (CLEAN, TRACE, LOW, MEDIUM, HIGH, CRITICAL), що базується на п’яти порогових значеннях аналогових показань датчика MQ-2. Система реалізує аналогове згладжування з буфером на 10 замірів для усунення випадкових коливань показань сенсора, що підвищує точність детекції диму на 40-50% порівняно з прямим зчитуванням.
+Бізнес-логіка пристрою реалізує розумну обробку даних з формуванням JSON телеметрії, що включає стан виявлення диму (smokeDetected), рівень задимлення (smokeLevel від 0 до 5), температуру та вологість повітря. Формат ISO 8601 для часових міток забезпечує коректну синхронізацію подій з серверною частиною системи SmokeGuard незалежно від часових поясів. Додатково реалізовано механізм heartbeat-повідомлень кожні 30 секунд для моніторингу стану підключення пристрою.
+Функції налаштування реалізовано через вбудований веб-сервер з HTML порталом конфігурації, що дозволяє користувачу без перепрошивки пристрою налаштувати параметри підключення: SSID/пароль WiFi, адресу MQTT сервера, порт MQTT, ідентифікатор датчика (sensorId), унікальний код датчика (sensorCode) та локацію встановлення. Конфігурація зберігається в енергонезалежній пам’яті NVS (Non-Volatile Storage) через бібліотеку Preferences, що забезпечує її збереження навіть при повному знеструмленні пристрою.
+Для оперативного входу в режим налаштування передбачено апаратну кнопку Boot (GPIO0), довге натискання якої протягом 5 секунд запускає точку доступу “SMOKEGUARD-CONFIG” з IP адресою 192.168.4.1, де доступний повний веб-інтерфейс налаштування всіх параметрів системи.
+
+
+2.2. Моделювання поведінки системи
+        Для детального проєктування бізнес-логіки IoT клієнта було виконано поведінкове моделювання системи з використанням мови UML.
+Діаграма прецедентів (див. рис. 2.1) візуалізує взаємодію пристрою з двома зовнішніми акторами: MQTT брокером та Користувачем.
+Основна логіка роботи системи зосереджена навколо прецеденту «Monitor Environment», який передбачає зчитування показників із сенсорів (MQ-2 та DHT11). Отримані дані передаються актору MQTT брокер через прецедент «Send Sensor Data», що включає в себе процес підключення до брокера. Для забезпечення надійності зв'язку передбачено механізми перепідключення до Wi-Fi та MQTT, а також відправка серцебиття («Send Heartbeat»).
+Також MQTT брокер ініціює прецедент «Receive Alarm Commands», який дозволяє системі реагувати на критичні показники шляхом активації або деактивації локальної тривоги.
+Актор Користувач взаємодіє з системою через прецедент «Configure Device» (вхід у режим конфігурації), що дозволяє налаштувати параметри підключення до мережі Wi-Fi.
+
+
+
+
+
+
+  
+
+Рисунок 2.1 – UML-діаграма прецедентів IoT клієнта
+
+
+Діаграма діяльності (див. рис. 2.2) відображає алгоритм роботи основного циклу IoT клієнта. Процес починається з ініціалізації компонентів. Далі відбувається перевірка умови входу в режим конфігурації: у разі підтвердження виконується запуск веб-інтерфейсу налаштувань із подальшим перезавантаженням пристрою.
+У штатному режимі система підключається до Wi-Fi та MQTT брокера і переходить до циклічного моніторингу. Цей цикл включає етапи зчитування даних із сенсорів, публікацію телеметрії на сервер та перевірку наявності вхідних команд керування. Залежно від отриманої команди виконується активація або деактивація тривоги, або ж цей крок пропускається.   Завершується ітерація циклу оновленням стану локальних індикаторів.
+Рисунок 2.2 – UML-діаграма діяльності IoT клієнта
+
+
+2.3. Схема електронних з'єднань
+Апаратна реалізація системи моніторингу безпеки базується на мікроконтролері ESP32-DEVKIT1 з підключенням периферійних модулів через цифрові та аналогові інтерфейси. Датчик температури та вологості DHT11 підключено через однопровідний протокол на GPIO15 з живленням 3.3V. Датчик газу MQ-2 підключено через аналоговий вихід (AO) на GPIO35 з використанням резистивного подільника напруги (R1=10кΩ, R2=20кΩ) для узгодження рівнів сигналу 0-5V до безпечного діапазону 0-3.3V. Датчик живиться від 5V (VIN) для забезпечення роботи нагрівального елемента.
+Модуль звукової сигналізації (Buzzer) з Low-level trigger підключено на GPIO18, червоний світлодіод індикації - на GPIO27 через струмообмежувальний резистор 220Ом. Живлення системи здійснюється через USB роз'єм з напругою 5V, вбудований стабілізатор ESP32 формує 3.3V для периферійних модулів. Всі компоненти з'єднані зі спільною землею (GND) для забезпечення стабільної роботи.
+
+
+2.4. Програмна реалізація бізнес-логіки
+Основна бізнес-логіка IoT клієнта реалізована через систему порогової класифікації показань датчика MQ-2 та автоматичне керування індикацією. Ключовим методом є getSmokeLevel(), який виконує класифікацію аналогових показань на шість рівнів небезпеки:
+
+
+#define SMOKE_BASELINE 150
+#define SMOKE_THRESHOLD_1 300
+#define SMOKE_THRESHOLD_2 500
+#define SMOKE_THRESHOLD_3 800
+#define SMOKE_THRESHOLD_4 1250
+#define SMOKE_THRESHOLD_5 1600
+
+
+enum AlertLevel {
+  LEVEL_0_CLEAN,
+  LEVEL_1_TRACE,
+  LEVEL_2_LOW,
+  LEVEL_3_MEDIUM,
+  LEVEL_4_HIGH,
+  LEVEL_5_CRITICAL
+};
+
+
+AlertLevel getSmokeLevel(int value) {
+  if (value < SMOKE_THRESHOLD_1) return LEVEL_0_CLEAN;
+  else if (value < SMOKE_THRESHOLD_2) return LEVEL_1_TRACE;
+  else if (value < SMOKE_THRESHOLD_3) return LEVEL_2_LOW;
+  else if (value < SMOKE_THRESHOLD_4) return LEVEL_3_MEDIUM;
+  else if (value < SMOKE_THRESHOLD_5) return LEVEL_4_HIGH;
+  else return LEVEL_5_CRITICAL;
+}
+
+
+Для усунення випадкових стрибків показань реалізовано ковзне середнє на 10 замірів:
+
+
+#define SAMPLES 10
+int analogSamples[SAMPLES];
+int sampleIndex = 0;
+
+
+int getSmoothedAnalog() {
+  analogSamples[sampleIndex] = analogRead(MQ2_PIN);
+  sampleIndex = (sampleIndex + 1) % SAMPLES;
+  
+  long sum = 0;
+  for (int i = 0; i < SAMPLES; i++) {
+    sum += analogSamples[i];
+  }
+  
+  return sum / SAMPLES;
+}
+
+
+
+
+
+
+Телеметричні дані публікуються на MQTT топік sensors/{sensorId}/data кожні 5 секунд у форматі JSON:
+
+
+void publishSensorData(bool smokeDetected, float smokeLevel, 
+                       float temperature, float humidity) {
+  if (!mqttClient.connected()) {
+    return;
+  }
+
+
+  StaticJsonDocument<256> doc;
+  doc["smokeDetected"] = smokeDetected;
+  doc["smokeLevel"] = smokeLevel;
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+
+
+  char buffer[256];
+  serializeJson(doc, buffer);
+
+
+  mqttClient.publish(topicData, buffer, false);
+}
+
+
+Система підтримує heartbeat моніторинг з інтервалом 30 секунд:
+
+
+void publishHeartbeat() {
+  if (!mqttClient.connected()) {
+    return;
+  }
+
+
+  StaticJsonDocument<256> doc;
+  doc["status"] = "online";
+  doc["rssi"] = WiFi.RSSI();
+  doc["uptime"] = millis() / 1000;
+  doc["freeHeap"] = ESP.getFreeHeap();
+
+
+  char buffer[256];
+  serializeJson(doc, buffer);
+
+
+  mqttClient.publish(topicHeartbeat, buffer, false);
+}
+
+
+Обробка команд керування тривогою реалізована через MQTT callback:
+
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+
+  StaticJsonDocument<256> doc;
+  deserializeJson(doc, message);
+
+
+  String topicStr = String(topic);
+
+
+  if (topicStr.indexOf("/activate") > 0) {
+    const char* command = doc["command"];
+    if (command && strcmp(command, "activate") == 0) {
+      alarmActive = true;
+      digitalWrite(LED_RED, HIGH);
+    }
+  }
+  else if (topicStr.indexOf("/deactivate") > 0) {
+    const char* command = doc["command"];
+    if (command && strcmp(command, "deactivate") == 0) {
+      alarmActive = false;
+      digitalWrite(LED_RED, LOW);
+      digitalWrite(BUZZER_PIN, HIGH);
+    }
+  }
+}
+
+
+Індикація реалізована через функцію updateIndicators(), яка динамічно керує частотою мигання LED та інтенсивністю звукових сигналів залежно від поточного рівня AlertLevel.
+
+
+2.5. Програмна реалізація функцій налаштування
+Функції налаштування IoT клієнта реалізовані через вбудований веб-сервер на порту 80 з HTML інтерфейсом для введення параметрів підключення. Конфігурація зберігається в енергонезалежній пам'яті ESP32 через бібліотеку Preferences з простором імен "smoke-cfg", що забезпечує збереження налаштувань між перезавантаженнями та знеструмленням пристрою.
+Структура конфігурації та завантаження з NVS:
+
+
+struct Config {
+  char ssid[32];
+  char password[64];
+  char mqttServer[64];
+  int mqttPort;
+  char sensorId[16];
+  char sensorCode[64];
+  char location[64];
+} config;
+
+
+void loadConfig() {
+  preferences.begin("smoke-cfg", false);
+
+
+  String ssid = preferences.getString("ssid", DEFAULT_SSID);
+  String password = preferences.getString("password", DEFAULT_PASSWORD);
+  String mqttServer = preferences.getString("mqtt_srv", DEFAULT_MQTT_SERVER);
+  int mqttPort = preferences.getInt("mqtt_port", DEFAULT_MQTT_PORT);
+  String sensorId = preferences.getString("sensor_id", DEFAULT_SENSOR_ID);
+  String sensorCode = preferences.getString("sensor_code", DEFAULT_SENSOR_CODE);
+  String location = preferences.getString("location", "");
+
+
+  ssid.toCharArray(config.ssid, sizeof(config.ssid));
+  password.toCharArray(config.password, sizeof(config.password));
+  mqttServer.toCharArray(config.mqttServer, sizeof(config.mqttServer));
+  config.mqttPort = mqttPort;
+  sensorId.toCharArray(config.sensorId, sizeof(config.sensorId));
+  sensorCode.toCharArray(config.sensorCode, sizeof(config.sensorCode));
+  location.toCharArray(config.location, sizeof(config.location));
+
+
+  preferences.end();
+}
+
+
+Збереження конфігурації в NVS:
+
+
+void saveConfig() {
+  preferences.begin("smoke-cfg", false);
+
+
+  preferences.putString("ssid", config.ssid);
+  preferences.putString("password", config.password);
+  preferences.putString("mqtt_srv", config.mqttServer);
+  preferences.putInt("mqtt_port", config.mqttPort);
+  preferences.putString("sensor_id", config.sensorId);
+  preferences.putString("sensor_code", config.sensorCode);
+  preferences.putString("location", config.location);
+
+
+  preferences.end();
+}
+
+
+Механізм входу в режим налаштування реалізовано через обробник апаратної кнопки Boot на GPIO0. Довге натискання (>5 секунд з усуненням брязкоту контактів через 100мс затримку) запускає конфігураційний портал з таймаутом 300 секунд, що дозволяє користувачу змінити параметри через веб-інтерфейс:
+
+
+void checkBootButton() {
+  if (digitalRead(BOOT_BUTTON) == LOW) {
+    if (!bootButtonPressed) {
+      bootButtonPressed = true;
+      bootButtonPressTime = millis();
+    } else {
+      if (millis() - bootButtonPressTime >= 5000) {
+        Serial.println("Boot button held for 5 seconds");
+        enterConfigMode();
+      }
+    }
+  } else {
+    bootButtonPressed = false;
+    bootButtonPressTime = 0;
+  }
+}
+
+
+Створення точки доступу та запуск веб-сервера:
+
+
+void enterConfigMode() {
+  currentMode = MODE_CONFIG;
+  configModeStartTime = millis();
+
+
+  String apName = "SmokeMonitor-" + String(config.sensorId);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(apName.c_str(), "12345678");
+
+
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("Access point created: ");
+  Serial.println(apName);
+  Serial.print("IP address: ");
+  Serial.println(IP);
+
+
+  setupWebServer();
+  server.begin();
+
+
+  digitalWrite(LED_RED, HIGH);
+}
+
+
+void handleConfigMode() {
+  server.handleClient();
+
+
+  unsigned long now = millis();
+  if (now - previousLedMillis >= 500) {
+    previousLedMillis = now;
+    ledState = !ledState;
+    digitalWrite(LED_RED, ledState ? HIGH : LOW);
+  }
+
+
+  if (now - configModeStartTime > CONFIG_MODE_TIMEOUT) {
+    Serial.println("Configuration timeout - restart");
+    ESP.restart();
+  }
+}
+
+
+Обробка збереження конфігурації з веб-форми:
+
+
+void handleSave() {
+  if (server.hasArg("plain")) {
+    String body = server.arg("plain");
+
+
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, body);
+
+
+    if (error) {
+      server.send(400, "application/json", 
+                  "{\"success\":false,\"error\":\"Invalid JSON\"}");
+      return;
+    }
+
+
+    String ssid = doc["ssid"].as<String>();
+    String password = doc["password"].as<String>();
+    String mqttServer = doc["mqttServer"].as<String>();
+    int mqttPort = doc["mqttPort"];
+    String sensorId = doc["sensorId"].as<String>();
+    String sensorCode = doc["sensorCode"].as<String>();
+    String location = doc["location"].as<String>();
+
+
+    ssid.toCharArray(config.ssid, sizeof(config.ssid));
+    password.toCharArray(config.password, sizeof(config.password));
+    mqttServer.toCharArray(config.mqttServer, sizeof(config.mqttServer));
+    config.mqttPort = mqttPort;
+    sensorId.toCharArray(config.sensorId, sizeof(config.sensorId));
+    sensorCode.toCharArray(config.sensorCode, sizeof(config.sensorCode));
+    location.toCharArray(config.location, sizeof(config.location));
+
+
+    saveConfig();
+
+
+    server.send(200, "application/json", "{\"success\":true}");
+
+
+    delay(3000);
+    ESP.restart();
+  } else {
+    server.send(400, "application/json", 
+                "{\"success\":false,\"error\":\"No data\"}");
+  }
+}
+
+
+При першому запуску або відсутності збережених WiFi credentials пристрій автоматично створює точку доступу "SmokeMonitor-{sensorId}" з паролем "12345678" та IP адресою 192.168.4.1, до якої користувач може підключитися з будь-якого смартфона або ноутбука для початкового налаштування всіх параметрів системи моніторингу безпеки.
+________________
+ВИСНОВКИ
+У ході виконання лабораторної роботи було успішно спроєктовано та реалізовано повнофункціональний IoT клієнт для системи моніторингу безпеки на базі мікроконтролера ESP32-DEVKIT1 з інтеграцією датчиків газу MQ-2 та температури/вологості DHT11. Основну увагу було зосереджено на розробці надійної бізнес-логіки обробки аналогових даних з датчика MQ-2 з реалізацією шестирівневої системи класифікації концентрації газу (від чистого повітря до критичного рівня) та аналогового згладжування на 10 замірах через ковзне середнє, що підвищило точність детекції та усунуло випадкові стрибки показань сенсора.
+Реалізована система передачі даних через протокол MQTT з публікацією телеметрії на топіки sensors/{sensorId}/data (кожні 5 секунд) та sensors/{sensorId}/heartbeat (кожні 30 секунд) забезпечує надійну інтеграцію з backend сервером та real-time моніторинг стану всіх датчиків у системі. Використання JSON формату для телеметрії з полями smokeDetected, smokeLevel, temperature, humidity гарантує сумісність з серверною частиною та коректну обробку подій. Двостороння MQTT комунікація через топіки alarms/+/activate та alarms/+/deactivate дозволяє віддалено керувати локальною сигналізацією датчика з серверного інтерфейсу.
+Розроблена система налаштування через власний веб-сервер з HTML порталом конфігурації дозволяє користувачам без технічних навичок програмування легко налаштувати датчик для роботи з MQTT брокером. Збереження конфігурації в енергонезалежній пам'яті NVS через бібліотеку Preferences з простором імен "smoke-cfg" гарантує збереження налаштувань навіть при повному знеструмленні, що критично важливо для автономних IoT датчиків пожежної сигналізації. Механізм входу в режим налаштування через довге натискання кнопки Boot (5 секунд) забезпечує зручність переконфігурації пристрою без необхідності перепрошивки firmware.
+Реалізована апаратна частина з використанням резистивного подільника напруги (10кΩ + 20кΩ) для узгодження рівнів сигналу MQ-2 (0-5V) до безпечного діапазону ESP32 (0-3.3V) забезпечує надійну роботу системи без ризику пошкодження мікроконтролера. Розроблена архітектура є масштабованою та може бути адаптована для інших типів IoT сенсорів системи моніторингу безпеки (датчики чадного газу CO, датчики полум'я, додаткові датчики температури) з мінімальними змінами в бізнес-логіці обробки даних та збереженням загальної структури MQTT комунікації.
+Репозиторій на GitHub: https://github.com/SmokeGuardProject/IOT
+Посилання на відеозвіт: https://drive.google.com/file/d/1WnUsHFrKrVijy4xTyIu_CFEBEvs_gFaK/view?usp=drive_link

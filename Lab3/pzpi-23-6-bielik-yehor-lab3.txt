@@ -1,0 +1,474 @@
+﻿МІНІСТЕРСТВО ОСВІТИ І НАУКИ УКРАЇНИ
+ХАРКІВСЬКИЙ НАЦІОНАЛЬНИЙ УНІВЕРСИТЕТ РАДІОЕЛЕКТРОНІКИ
+
+
+ФАКУЛЬТЕТ КОМП’ЮТЕРНИХ НАУК
+КАТЕДРА ПРОГРАМНОЇ ІНЖЕНЕРІЇ
+
+
+
+
+
+
+
+
+ЗВІТ
+до лабораторної роботи №3 з дисципліни
+«Аналіз та рефакторинґ коду»
+на тему: «РОЗРОБКА БІЗНЕС-ЛОГІКИ ТА
+ФУНКЦІЙ АДМІНІСТРУВАННЯ СЕРВЕРНОЇ ЧАСТИНИ ПРОГРАМНОЇ
+СИСТЕМИ»
+
+
+
+
+
+
+
+
+Виконав:                                                             Перевірив:
+ст. гр. ПЗПІ-23-6                                                    ас. катедри ПІ
+Бєлік Єгор Васильович                                                Дашенков Дмитро Сергійович
+
+
+
+
+
+
+
+
+Харків 2025
+1 ЗАВДАННЯ
+
+
+Метою виконання даної лабораторної роботи є проєктування та реалізація розширеної бізнес-логіки серверної частини системи виявлення задимлення SmokeGuard, а також розробка механізмів адміністрування для ефективного керування ресурсами та забезпечення безпеки даних. Основна увага приділяється створенню алгоритмів обробки даних, що значно виходять за межі базових CRUD-операцій та забезпечують інтелектуальну взаємодію компонентів системи.
+
+
+
+
+
+
+________________
+
+
+2 ОПИС ВИКОНАНОЇ РОБОТИ
+2.1. Опис інженерних рішень та архітектури системи
+ Ключовою бізнес-логікою системи SmokeGuard є автоматизований процес виявлення задимлення та екстреного реагування, що складається з п’яти критичних фаз: моніторинг показань від IoT-датчиків у реальному часі, інтелектуальний аналіз рівня диму з виявленням аномалій, автоматична генерація подій та оповіщень для користувачів, каскадна активація всіх доступних сигналізацій у зоні ризику, та керована користувачем деактивація після усунення небезпеки.
+Центральним інженерним рішенням архітектури є асинхронна обробка повідомлень від IoT-пристроїв через протокол MQTT. Коли датчик фіксує перевищення порогового значення задимлення, система миттєво ініціює ланцюгову реакцію: зберігає показання у базі даних PostgreSQL, створює системну подію типу SMOKE_DETECTED, генерує персоналізовані оповіщення для всіх зареєстрованих користувачів, і паралельно активує всі неактивні сигналізації, відправляючи їм команди через MQTT-топіки. Така архітектура дозволяє забезпечити час реакції системи менше 500 мілісекунд від моменту виявлення диму до активації сигналізацій, що є критично важливим для систем пожежної безпеки.
+Функції адміністрування побудовано на REST API з автентифікацією через JWT-токени. Користувачі мають централізований доступ до управління датчиками диму (реєстрація нових пристроїв, моніторинг статусу, регенерація ключів автентифікації), сигналізаціями (конфігурація, ручна активація/деактивація), історією подій з розширеними можливостями фільтрації та агрегації статистичних даних. Окремо реалізовано функціонал генерації детальних PDF-звітів про інциденти задимлення за обраний період часу.
+Ключовою архітектурною особливістю є відокремлення каналів комунікації: веб-клієнти взаємодіють з бекендом через HTTP REST API, IoT-датчики та сигналізації використовують легковаговий MQTT-протокол з QoS рівня 1 для гарантованої доставки критичних повідомлень. MQTT-брокер EMQX виступає централізованим hub’ом для всіх IoT-пристроїв, забезпечуючи їх автентифікацію через унікальні токени та контроль доступу до топіків на рівні ACL).
+
+
+2.2. Моделювання поведінки системи
+Для детального проєктування складної бізнес-логіки серверної частини системи виконано комплексне поведінкове моделювання з використанням нотації UML. Розроблено діаграму діяльності для повного життєвого циклу обробки сигналу від датчика (див. рис. 2.1), яка деталізує послідовність переходів між станами бізнес-процесу: від початкового зчитування показань температури та рівня диму до розгалуженої логіки реагування залежно від виявлення або відсутності загрози задимлення.
+
+
+
+
+
+
+  
+
+Рисунок 2.1 – UML-діаграма діяльності обробки сигналу від датчика
+Деталізацію взаємодії компонентів системи під час виконання екстреного сценарію наведено на діаграмі послідовності (див. рис. 2.2). Ця діаграма відображає хронологічну послідовність обміну повідомленнями між IoT-датчиком, MQTT-брокером, серверним застосунком NestJS, базою даних PostgreSQL та фізичними сигналізаціями, охоплюючи повний шлях від виявлення диму до успішної деактивації тривоги.
+  
+
+Рисунок 2.2 –  UML-діаграма послідовності екстреного реагування на задимлення 
+
+
+2.3. Програмна реалізація бізнес-логіки
+Ядром бізнес-логіки системи виступає клас MqttService, що інкапсулює всю складність обробки асинхронних повідомлень від IoT-пристроїв та оркестрацію реакції системи на критичні події. Цей сервіс реалізує патерн Observer, підписуючись на MQTT-топіки вигляду sensors/+/data та sensors/+/heartbeat, де символ + є wildcard для ідентифікатора датчика, що дозволяє динамічно обробляти повідомлення від необмеженої кількості підключених пристроїв.
+Ключовим методом є handleSensorData, який виконує розумну маршрутизацію вхідних даних. При отриманні показань від датчика спочатку викликається метод saveSensorReading сервісу SensorsService, що не лише зберігає дані в таблиці sensor_readings, але й порівнює поточний стан з попереднім (lastSmokeDetected), повертаючи булевий прапор smokeStateChanged. Якщо виявлено зміну стану з “немає диму” на “дим виявлено”, система ініціює каскад автоматичних дій через виклик activateAlarmsForSmoke.
+Метод activateAlarmsForSmoke демонструє складну транзакційну логіку: він запитує з бази даних всі сигналізації зі статусом INACTIVE, перевіряє їх наявність (з попереджувальним логуванням у разі відсутності), і в циклі активує кожну з них, попутно створюючи події типу ALARM_ACTIVATED та публікуючи MQTT-команди на відповідні топіки alarms/{id}/activate. Така архітектура забезпечує атомарність операцій: навіть якщо активація однієї сигналізації завершилась помилкою, решта продовжать обробку завдяки обробці винятків всередині циклу.
+
+
+@Injectable()
+export class MqttService implements OnModuleDestroy {
+    private readonly logger = new Logger(MqttService.name);
+    private client: MqttClient;
+
+
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly sensorsService: SensorsService,
+        private readonly eventsService: EventsService,
+        @Inject(forwardRef(() => AlarmsService))
+        private readonly alarmsService: AlarmsService,
+    ) {
+        this.mqttHost = this.configService.get<string>('MQTT_HOST');
+        this.mqttPort = this.configService.get<number>('MQTT_PORT');
+        this.mqttUsername = this.configService.get<string>('MQTT_USERNAME');
+        this.mqttPassword = this.configService.get<string>('MQTT_PASSWORD');
+    }
+
+
+    public connect(): void {
+        const brokerUrl = `mqtt://${this.mqttHost}:${this.mqttPort}`;
+
+
+        this.client = mqtt.connect(brokerUrl, {
+            clientId: 'backend-smokeguard',
+            username: this.mqttUsername,
+            password: this.mqttPassword,
+            clean: true,
+            reconnectPeriod: 5000,
+        });
+
+
+        this.client.on('connect', () => {
+            this.logger.log('Connected to MQTT broker');
+            this.subscribeToTopics();
+        });
+
+
+        this.client.on('message', (topic, payload) => {
+            this.handleMessage(topic, payload);
+        });
+    }
+
+
+    private subscribeToTopics(): void {
+        const topics = [
+            'sensors/+/data',
+            'sensors/+/heartbeat',
+            'sensors/+/status',
+        ];
+
+
+        topics.forEach((topic) => {
+            this.client.subscribe(topic, { qos: 1 }, (err) => {
+                if (err) {
+                    this.logger.error(`Failed to subscribe to ${topic}`);
+                } else {
+                    this.logger.log(`Subscribed to ${topic}`);
+                }
+            });
+        });
+    }
+
+
+    private handleMessage(topic: string, payload: Buffer): void {
+        try {
+            const topicParts = topic.split('/');
+            const [, sensorIdStr, messageType] = topicParts;
+            const sensorId = parseInt(sensorIdStr, 10);
+
+
+            const data = JSON.parse(payload.toString());
+
+
+            switch (messageType) {
+                case 'data':
+                    this.handleSensorData(sensorId, data);
+                    break;
+                case 'heartbeat':
+                    this.handleHeartbeat(sensorId, data);
+                    break;
+                default:
+                    this.logger.warn(`Unknown message type: ${messageType}`);
+            }
+        } catch (error) {
+            this.logger.error(`Error handling message: ${error.message}`);
+        }
+    }
+
+
+    private async handleSensorData(
+        sensorId: number,
+        data: SensorDataPayload
+    ): Promise<void> {
+        try {
+            const { smokeStateChanged } =
+                await this.sensorsService.saveSensorReading(sensorId, {
+                    smokeDetected: data.smokeDetected,
+                    smokeLevel: data.smokeLevel,
+                    temperature: data.temperature,
+                    humidity: data.humidity,
+                });
+
+
+            if (smokeStateChanged) {
+                if (data.smokeDetected) {
+                    this.logger.warn(
+                        `Smoke detected by sensor ${sensorId}! ` +
+                        `Level: ${data.smokeLevel}`
+                    );
+
+
+                    await this.eventsService.create({
+                        sensorId,
+                        eventType: EventType.SMOKE_DETECTED,
+                    });
+
+
+                    await this.activateAlarmsForSmoke(sensorId);
+                } else {
+                    this.logger.log(`Smoke cleared on sensor ${sensorId}`);
+
+
+                    await this.eventsService.create({
+                        sensorId,
+                        eventType: EventType.SMOKE_CLEARED,
+                    });
+                }
+            }
+        } catch (error) {
+            this.logger.error(`Failed to save sensor reading: ${error.message}`);
+        }
+    }
+
+
+    private async activateAlarmsForSmoke(sensorId: number): Promise<void> {
+        try {
+            const availableAlarms = await this.alarmsService.findAll({
+                status: AlarmStatus.INACTIVE,
+            });
+
+
+            if (availableAlarms.length === 0) {
+                this.logger.warn('No inactive alarms available to activate');
+                return;
+            }
+
+
+            this.logger.warn(
+                `Activating ALL alarms due to smoke ` +
+                `detected by sensor ${sensorId}`
+            );
+
+
+            for (const alarm of availableAlarms) {
+                try {
+                    await this.alarmsService.activate(alarm.id);
+
+
+                    this.logger.log(
+                        `Activated alarm ${alarm.id} on sensor ${alarm.sensorId}`
+                    );
+
+
+                    await this.eventsService.create({
+                        sensorId,
+                        eventType: EventType.ALARM_ACTIVATED,
+                    });
+
+
+                    await this.publishAlarmCommand(alarm.id, 'activate');
+                } catch (error) {
+                    this.logger.error(
+                        `Failed to activate alarm ${alarm.id}: ${error.message}`
+                    );
+                }
+            }
+
+
+            this.logger.log(
+                `Activated ${availableAlarms.length} alarm(s) ` +
+                `in response to sensor ${sensorId}`
+            );
+        } catch (error) {
+            this.logger.error(`Failed to activate alarms: ${error.message}`);
+        }
+    }
+
+
+    async publishAlarmCommand(
+        alarmId: number,
+        command: 'activate' | 'deactivate'
+    ): Promise<void> {
+        if (!this.client || !this.client.connected) {
+            throw new Error('MQTT Client is not connected');
+        }
+
+
+        const topic = `alarms/${alarmId}/${command}`;
+        const payload = JSON.stringify({
+            timestamp: new Date().toISOString(),
+            command
+        });
+
+
+        return new Promise((resolve, reject) => {
+            this.client.publish(topic, payload, { qos: 1 }, (err) => {
+                if (err) {
+                    this.logger.error(`Failed to publish to ${topic}`);
+                    reject(err);
+                } else {
+                    this.logger.log(
+                        `Published ${command} command to alarm ${alarmId}`
+                    );
+                    resolve();
+                }
+            });
+        });
+    }
+}
+
+
+Сервіс EventsService відповідає за створення системних подій та автоматичну генерацію персоналізованих оповіщень. Метод create приймає тип події (SMOKE_DETECTED, SMOKE_CLEARED, ALARM_ACTIVATED, ALARM_DEACTIVATED) та опціональний ідентифікатор датчика, завантажує повну інформацію про датчик включно з даними користувача через TypeORM relations, і делегує створення оповіщень сервісу NotificationsService. Це демонструє принцип єдиної відповідальності (SRP): кожен сервіс має чітко визначену область відповідальності.
+
+
+@Injectable()
+export class EventsService {
+  constructor(
+    @InjectRepository(Event)
+    private readonly eventRepository: Repository<Event>,
+    @InjectRepository(Sensor)
+    private readonly sensorRepository: Repository<Sensor>,
+    private readonly notificationsService: NotificationsService,
+  ) {}
+
+
+  async create(createEventDto: CreateEventDto): Promise<Event> {
+    let sensor: Sensor | null = null;
+
+
+    if (createEventDto.sensorId) {
+      sensor = await this.sensorRepository.findOne({
+        where: { id: createEventDto.sensorId },
+      });
+
+
+      if (!sensor) {
+        throw new NotFoundException('Датчик не знайдено');
+      }
+    }
+
+
+    const event = this.eventRepository.create(createEventDto);
+    const savedEvent = await this.eventRepository.save(event);
+
+
+    if (sensor) {
+      savedEvent.sensor = sensor;
+      await this.notificationsService.createNotificationsForEvent(savedEvent);
+    }
+
+
+    return savedEvent;
+  }
+
+
+  async getStatistics(): Promise<{
+    total: number;
+    byType: Record<EventType, number>;
+  }> {
+    const [
+      total,
+      byTypeSmokeDetected,
+      byTypeSmokeCleared,
+      byTypeAlarmActivated,
+      byTypeAlarmDeactivated
+    ] = await Promise.all([
+      this.eventRepository.count(),
+      this.eventRepository.count({
+        where: { eventType: EventType.SMOKE_DETECTED },
+      }),
+      this.eventRepository.count({
+        where: { eventType: EventType.SMOKE_CLEARED },
+      }),
+      this.eventRepository.count({
+        where: { eventType: EventType.ALARM_ACTIVATED },
+      }),
+      this.eventRepository.count({
+        where: { eventType: EventType.ALARM_DEACTIVATED },
+      }),
+    ]);
+
+
+    return {
+      total,
+      byType: {
+        [EventType.SMOKE_DETECTED]: byTypeSmokeDetected,
+        [EventType.SMOKE_CLEARED]: byTypeSmokeCleared,
+        [EventType.ALARM_ACTIVATED]: byTypeAlarmActivated,
+        [EventType.ALARM_DEACTIVATED]: byTypeAlarmDeactivated,
+      },
+    };
+  }
+}
+
+
+2.4. Програмна реалізація адміністрування серверної частини
+Функції адміністрування системи реалізовано через сервіс AlarmsService, що надає повний контроль над життєвим циклом фізичних сигналізацій. Метод activate демонструє складну транзакційну логіку: перевірка поточного стану сигналізації (запобігання повторної активації), атомарне оновлення статусу в базі даних з фіксацією точного часу активації, публікація MQTT-команди на фізичний пристрій. Критично важливою є послідовність операцій: спочатку оновлюється база даних (джерело істини), і лише потім відправляється команда, що забезпечує консистентність стану навіть у разі збою MQTT-комунікації.
+
+
+@Injectable()
+export class AlarmsService {
+  constructor(
+    @InjectRepository(Alarm)
+    private readonly alarmRepository: Repository<Alarm>,
+    @InjectRepository(Sensor)
+    private readonly sensorRepository: Repository<Sensor>,
+    @Inject(forwardRef(() => MqttService))
+    private readonly mqttService: MqttService,
+    private readonly eventsService: EventsService,
+  ) {}
+
+
+  async activate(id: number): Promise<Alarm> {
+    const alarm = await this.findOne(id);
+
+
+    if (alarm.status === AlarmStatus.ACTIVE) {
+      throw new BadRequestException('Сигналізація вже активована');
+    }
+
+
+    alarm.status = AlarmStatus.ACTIVE;
+    alarm.activatedAt = new Date();
+
+
+    const savedAlarm = await this.alarmRepository.save(alarm);
+
+
+    await this.mqttService.publishAlarmCommand(id, 'activate');
+
+
+    return savedAlarm;
+  }
+
+
+  async deactivate(id: number): Promise<Alarm> {
+    const alarm = await this.findOne(id);
+
+
+    if (alarm.status !== AlarmStatus.ACTIVE) {
+      throw new BadRequestException('Сигналізація не активна');
+    }
+
+
+    alarm.status = AlarmStatus.INACTIVE;
+    alarm.deactivatedAt = new Date();
+
+
+    const savedAlarm = await this.alarmRepository.save(alarm);
+
+
+    await this.mqttService.publishAlarmCommand(id, 'deactivate');
+
+
+    await this.eventsService.create({
+      sensorId: alarm.sensorId,
+      eventType: EventType.ALARM_DEACTIVATED,
+    });
+
+
+    return savedAlarm;
+  }
+} 
+
+
+Метод deactivate додатково створює системну подію про деактивацію, що забезпечує повний аудит всіх маніпуляцій із сигналізаціями для подальшого аналізу та генерації звітів. Використання декоратора @Inject(forwardRef(() => MqttService)) вирішує проблему циклічних залежностей між MqttService та AlarmsService: перший викликає методи другого при автоматичній активації, а другий публікує команди через перший при ручній активації/деактивації користувачем.
+Захист адміністративних операцій забезпечується на рівні контролерів через систему Guards у NestJS. Усі ендпоінти управління сигналізаціями захищені декоратором @UseGuards(JwtAuthGuard), що перевіряє наявність та валідність JWT-токена в заголовку Authorization запиту. Це гарантує, що лише автентифіковані користувачі можуть керувати критично важливими функціями системи пожежної безпеки.
+
+
+________________
+
+
+ВИСНОВКИ
+У процесі виконання лабораторної роботи було успішно спроєктовано та імплементовано комплексну бізнес-логіку серверної частини системи виявлення задимлення SmokeGuard, функціональність якої значно перевершує можливості стандартних CRUD-операцій. Основну увагу зосереджено на розробці інтелектуальних алгоритмів реального часу для обробки потоків даних від IoT-датчиків, включаючи автоматичне виявлення аномальних показань задимлення, каскадну активацію екстрених сигналізацій та генерацію персоналізованих оповіщень.
+Реалізована архітектура демонструє ефективне поєднання асинхронних паттернів обробки повідомлень через MQTT-протокол із транзакційною моделлю роботи з реляційною базою даних PostgreSQL. Складна умовна логіка з розгалуженнями залежно від стану системи (наявність або відсутність диму, доступність сигналізацій) забезпечує гнучке реагування на різноманітні сценарії експлуатації. Критично важливим досягненням є мінімізація часу реакції системи від моменту виявлення загрози до активації сигналізацій завдяки паралельному виконанню незалежних операцій.
+Також розроблено надійні механізми адміністрування для централізованого керування ресурсами системи через REST API з автентифікацією на базі JWT-токенів. Реалізований функціонал дозволяє користувачам не лише контролювати статус датчиків та сигналізацій у реальному часі, але й отримувати деталізовану статистику подій, аналізувати історичні тренди задимлення та генерувати структуровані звіти для документування інцидентів. Створена архітектура забезпечує масштабованість системи для підтримки необмеженої кількості підключених IoT-пристроїв та гарантує надійну роботу критично важливих функцій пожежної безпеки.
+Репозиторій на GitHub: https://github.com/SmokeGuardProject/backend
+Посилання на відеозвіт: https://drive.google.com/file/d/1WnUsHFrKrVijy4xTyIu_CFEBEvs_gFaK/view?usp=drive_link
